@@ -8,11 +8,10 @@ const DISCORD_2FA = process.env.DISCORD_2FA || '';
 
 const TIMEOUT = 120000;
 
-// 🛡️ 暴力清除广告 (连根拔起 Google Ads iframe，防止遮挡图二的弹窗)
+// 🛡️ 暴力清除广告 (连根拔起 Google Ads iframe)
 async function killAllAds(page) {
     console.log('🛡️ 启动广告雷达，清除页面遮挡物...');
     try {
-        // 1. 底层删除全屏广告 iframe
         await page.evaluate(() => {
             document.querySelectorAll('iframe').forEach(iframe => {
                 if (iframe.id.includes('google') || iframe.src.includes('ads') || iframe.id.includes('vignette') || iframe.name.includes('google')) {
@@ -21,7 +20,6 @@ async function killAllAds(page) {
             });
         });
         
-        // 2. 尝试点击常规关闭按钮
         const adCloseSelectors = ['button[aria-label="Close"]', '.close-button', 'div[class*="ad"] button[class*="close"]'];
         for (const selector of adCloseSelectors) {
             const closeBtn = page.locator(selector).first();
@@ -50,6 +48,25 @@ function sendTG(resultText, coinBalance) {
         req.write(JSON.stringify({ chat_id: TG_CHAT_ID, text: msg }));
         req.end();
     });
+}
+
+// ⏱️ 获取并解析网页上的剩余时间
+async function getRemainingTime(page) {
+    const text = await page.evaluate(() => document.getElementById('renewal-status-console')?.innerText.trim());
+    if (!text) return { text: "获取失败", totalDays: 0 };
+    
+    const daysMatch = text.match(/(\d+(?:\.\d+)?)\s*day/i);
+    const hoursMatch = text.match(/(\d+(?:\.\d+)?)\s*hour/i);
+    
+    const days = daysMatch ? parseInt(daysMatch[1]) : 0;
+    const hoursRaw = hoursMatch ? parseFloat(hoursMatch[1]) : 0;
+    const hours = Math.floor(hoursRaw);
+    const minutes = Math.round((hoursRaw - hours) * 60);
+    
+    return {
+        text: `${days}天 ${hours}小时 ${minutes}分钟`,
+        totalDays: days + (hoursRaw / 24) // 转换为精确的小数天数，方便前后比对大小
+    };
 }
 
 test('FreezeHost 多服务器自动续期', async () => {
@@ -136,35 +153,19 @@ test('FreezeHost 多服务器自动续期', async () => {
             await page.goto(srv.url, { waitUntil: 'domcontentloaded' });
             await page.waitForTimeout(3000);
 
-            const renewalStatusText = await page.evaluate(() => document.getElementById('renewal-status-console')?.innerText.trim());
-            let remainingText = "获取失败";
-            let needRenew = true;
-
-            // 1. 判断时间逻辑 (>7天跳过，<=7天续费)
-            if (renewalStatusText) {
-                const daysMatch = renewalStatusText.match(/(\d+(?:\.\d+)?)\s*day/i);
-                const hoursMatch = renewalStatusText.match(/(\d+(?:\.\d+)?)\s*hour/i);
-                
-                const days = daysMatch ? parseInt(daysMatch[1]) : 0;
-                const hoursRaw = hoursMatch ? parseFloat(hoursMatch[1]) : 0;
-                const hours = Math.floor(hoursRaw);
-                const minutes = Math.round((hoursRaw - hours) * 60);
-                
-                remainingText = `${days}天 ${hours}小时 ${minutes}分钟`;
-
-                if (days > 7) {
-                    needRenew = false;
-                    reportLines.push(`${srv.name} : ⏳ 未到期 (剩余: ${remainingText})`);
-                    console.log(`  ⏰ 剩余 ${remainingText}，无需操作`);
-                }
+            // ⏱️ 1. 获取续期前的初始时间
+            let preTime = await getRemainingTime(page);
+            
+            if (preTime.totalDays > 7) {
+                reportLines.push(`${srv.name} : ⏳ 未到期 (剩余: ${preTime.text})`);
+                console.log(`  ⏰ 剩余 ${preTime.text}，无需操作`);
+                continue;
             }
 
-            if (!needRenew) continue;
-
             console.log(`  ✅ 准备续费 [${srv.name}] ...`);
-            await killAllAds(page); // 杀掉所有广告
+            await killAllAds(page);
 
-            // 2. 点击图一：外链小图标 (绕开隐藏的好评弹窗)
+            // 2. 点击图一：外链小图标
             console.log(`  🔍 寻找并点击续期外链图标(图一)...`);
             const clickedIcon = await page.evaluate(() => {
                 const icons = document.querySelectorAll('i.fa-external-link-alt');
@@ -182,7 +183,7 @@ test('FreezeHost 多服务器自动续期', async () => {
             if (clickedIcon) {
                 console.log(`  ✅ 图一图标已点击，等待图二弹窗...`);
                 await page.waitForTimeout(3000);
-                await killAllAds(page); // 弹窗期间可能又刷广告，再杀一次
+                await killAllAds(page);
 
                 // 3. 弹窗处理：找到黄色的 RENEW INSTANCE 按钮并点击
                 const renewBtn = page.locator('#renew-link-modal');
@@ -192,25 +193,35 @@ test('FreezeHost 多服务器自动续期', async () => {
                     const btnText = (await renewBtn.innerText()).trim();
                     if (btnText.toLowerCase().includes('renew instance')) {
                         console.log(`  📤 找到黄色按钮，执行物理点击！`);
-                        
-                        // 🚀 核心修复：直接强制点击图二的黄色按钮，完美模拟真人
                         await renewBtn.click({ force: true });
-                        await page.waitForTimeout(6000); // 等待请求处理和页面跳转
+                        await page.waitForTimeout(6000); // 等待请求提交
 
-                        if (page.url().includes('success=RENEWED')) {
-                            reportLines.push(`${srv.name} : ✅ 成功续期 (最新时间需等下次运行更新)`);
-                        } else if (page.url().includes('err=CANNOTAFFORDRENEWAL')) {
+                        // 快速判断是否有余额不足的报错
+                        if (page.url().includes('err=CANNOTAFFORDRENEWAL')) {
                             reportLines.push(`${srv.name} : ❌ 余额不足 (需要 100 币)`);
-                        } else if (page.url().includes('err=TOOEARLY')) {
-                            reportLines.push(`${srv.name} : ⏳ 未到期 (剩余: ${remainingText})`);
-                        } else {
-                            reportLines.push(`${srv.name} : ⚠️ 点击完成，但未识别到成功标记 (当前URL: ${page.url()})`);
+                            continue;
                         }
+
+                        // 🔄 4. 核心终极逻辑：无论跳到哪里，强行刷新回到服务器面板获取最新时间
+                        console.log(`  🔄 重新加载页面，获取最新时间...`);
+                        await page.goto(srv.url, { waitUntil: 'domcontentloaded' });
+                        await page.waitForTimeout(4000);
+                        
+                        let postTime = await getRemainingTime(page);
+                        
+                        // 对比续期前后天数，只要最新时间比以前大，就是成功
+                        if (postTime.totalDays > preTime.totalDays) {
+                            reportLines.push(`${srv.name} : ✅ 成功续期 (最新剩余: ${postTime.text})`);
+                            console.log(`  🎉 续费验证成功，最新剩余: ${postTime.text}`);
+                        } else {
+                            reportLines.push(`${srv.name} : ⚠️ 点击完成，但时间未增加 (当前: ${postTime.text})`);
+                        }
+
                     } else {
                         reportLines.push(`${srv.name} : ⏳ 未到期 (按钮: ${btnText})`);
                     }
                 } else {
-                    reportLines.push(`${srv.name} : ⚠️ 弹窗未显示 (可能被广告拦截或节点卡顿)`);
+                    reportLines.push(`${srv.name} : ⚠️ 弹窗未显示`);
                 }
             } else {
                 reportLines.push(`${srv.name} : ⚠️ 未找到续期图标`);
