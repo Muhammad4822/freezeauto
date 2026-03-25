@@ -1,0 +1,8 @@
+{
+  "name": "freezehost-autorenew",
+  "version": "2.0.0",
+  "dependencies": {
+    "otplib": "^12.0.1",
+    "@playwright/test": "latest"
+  }
+}
