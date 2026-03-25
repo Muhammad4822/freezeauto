@@ -8,26 +8,36 @@ const DISCORD_2FA = process.env.DISCORD_2FA || '';
 
 const TIMEOUT = 120000;
 
-// 🛡️ 尝试关闭广告
-async function tryCloseAds(page) {
-    const adCloseSelectors = ['button[aria-label="Close"]', '.close-button', 'div[class*="ad"] button[class*="close"]'];
-    for (const selector of adCloseSelectors) {
-        try {
+// 🛡️ 暴力清除广告 (连根拔起 Google Ads iframe，防止遮挡图二的弹窗)
+async function killAllAds(page) {
+    console.log('🛡️ 启动广告雷达，清除页面遮挡物...');
+    try {
+        // 1. 底层删除全屏广告 iframe
+        await page.evaluate(() => {
+            document.querySelectorAll('iframe').forEach(iframe => {
+                if (iframe.id.includes('google') || iframe.src.includes('ads') || iframe.id.includes('vignette') || iframe.name.includes('google')) {
+                    iframe.remove();
+                }
+            });
+        });
+        
+        // 2. 尝试点击常规关闭按钮
+        const adCloseSelectors = ['button[aria-label="Close"]', '.close-button', 'div[class*="ad"] button[class*="close"]'];
+        for (const selector of adCloseSelectors) {
             const closeBtn = page.locator(selector).first();
-            if (await closeBtn.isVisible({ timeout: 500 })) {
-                await closeBtn.click();
+            if (await closeBtn.isVisible({ timeout: 500 }).catch(() => false)) {
+                await closeBtn.click({ force: true });
                 await page.waitForTimeout(500);
             }
-        } catch { }
-    }
+        }
+    } catch { }
 }
 
-// 📨 发送合并的 TG 消息 (加入了金币变量)
+// 📨 发送合并的 TG 消息
 function sendTG(resultText, coinBalance) {
     return new Promise((resolve) => {
         if (!TG_CHAT_ID || !TG_TOKEN) return resolve();
         
-        // 按照你的要求排版：结果 -> 金币 -> 官网
         const msg = `🎮 FreezeHost 续期报告\n\n${resultText}\n\n💰 账户余额：${coinBalance} 金币\n\n官网地址：https://free.freezehost.pro/`;
 
         const req = https.request({
@@ -52,7 +62,7 @@ test('FreezeHost 多服务器自动续期', async () => {
     page.setDefaultTimeout(TIMEOUT);
     
     let reportLines = []; 
-    let coinBalance = "未知"; // 初始化金币变量
+    let coinBalance = "未知";
 
     try {
         console.log('🔑 访问并登录 FreezeHost...');
@@ -83,23 +93,18 @@ test('FreezeHost 多服务器自动续期', async () => {
 
         await page.waitForTimeout(4000);
 
-        // 🚀 新增功能：智能提取金币余额
+        // 💰 抓取金币余额
         try {
-            console.log('🔍 正在抓取金币余额...');
             coinBalance = await page.evaluate(() => {
-                // 暴力检索整个网页的纯文本寻找余额特征
                 const bodyText = document.body.innerText;
                 const match1 = bodyText.match(/AVAILABLE BALANCE\s*([\d,]+)/i);
                 const match2 = bodyText.match(/([\d,]+)\s*GLOBAL CURRENCY/i);
-                
                 if (match1) return match1[1];
                 if (match2) return match2[1];
                 return "未知";
             });
             console.log(`💰 当前金币余额：${coinBalance}`);
-        } catch (e) {
-            console.log('⚠️ 获取金币失败:', e.message);
-        }
+        } catch (e) { }
 
         // 🚀 提取服务器名称
         const servers = await page.evaluate(() => {
@@ -114,7 +119,6 @@ test('FreezeHost 多服务器自动续期', async () => {
                     }
                     el = el.parentElement;
                 }
-
                 let name = `服务器-${idx + 1}`;
                 if (cardText) {
                     const lines = cardText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
@@ -136,13 +140,13 @@ test('FreezeHost 多服务器自动续期', async () => {
             let remainingText = "获取失败";
             let needRenew = true;
 
+            // 1. 判断时间逻辑 (>7天跳过，<=7天续费)
             if (renewalStatusText) {
                 const daysMatch = renewalStatusText.match(/(\d+(?:\.\d+)?)\s*day/i);
                 const hoursMatch = renewalStatusText.match(/(\d+(?:\.\d+)?)\s*hour/i);
                 
                 const days = daysMatch ? parseInt(daysMatch[1]) : 0;
                 const hoursRaw = hoursMatch ? parseFloat(hoursMatch[1]) : 0;
-                
                 const hours = Math.floor(hoursRaw);
                 const minutes = Math.round((hoursRaw - hours) * 60);
                 
@@ -158,42 +162,55 @@ test('FreezeHost 多服务器自动续期', async () => {
             if (!needRenew) continue;
 
             console.log(`  ✅ 准备续费 [${srv.name}] ...`);
-            await tryCloseAds(page);
+            await killAllAds(page); // 杀掉所有广告
 
-            const visibleParent = page.locator('i.fa-external-link-alt').locator('xpath=..').filter({ state: 'visible' }).first();
-            await visibleParent.waitFor({ state: 'visible', timeout: 15000 }).catch(() => {});
-            
-            if (await visibleParent.count() > 0) {
-                await visibleParent.hover();
-                await page.waitForTimeout(1000);
-                await visibleParent.locator('i.fa-external-link-alt').click({ force: true });
-                await page.waitForTimeout(2000);
-                await tryCloseAds(page);
+            // 2. 点击图一：外链小图标 (绕开隐藏的好评弹窗)
+            console.log(`  🔍 寻找并点击续期外链图标(图一)...`);
+            const clickedIcon = await page.evaluate(() => {
+                const icons = document.querySelectorAll('i.fa-external-link-alt');
+                for (let icon of icons) {
+                    let parent = icon.parentElement;
+                    if (parent && parent.outerHTML.includes('reviewAction')) continue;
+                    if (parent) {
+                        parent.click();
+                        return true;
+                    }
+                }
+                return false;
+            });
 
+            if (clickedIcon) {
+                console.log(`  ✅ 图一图标已点击，等待图二弹窗...`);
+                await page.waitForTimeout(3000);
+                await killAllAds(page); // 弹窗期间可能又刷广告，再杀一次
+
+                // 3. 弹窗处理：找到黄色的 RENEW INSTANCE 按钮并点击
                 const renewBtn = page.locator('#renew-link-modal');
                 await renewBtn.waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
 
                 if (await renewBtn.isVisible()) {
                     const btnText = (await renewBtn.innerText()).trim();
                     if (btnText.toLowerCase().includes('renew instance')) {
-                        const renewUrl = await renewBtn.getAttribute('href');
-                        await page.goto(new URL(renewUrl, page.url()).href, { waitUntil: 'domcontentloaded' });
-                        await page.waitForTimeout(5000);
+                        console.log(`  📤 找到黄色按钮，执行物理点击！`);
+                        
+                        // 🚀 核心修复：直接强制点击图二的黄色按钮，完美模拟真人
+                        await renewBtn.click({ force: true });
+                        await page.waitForTimeout(6000); // 等待请求处理和页面跳转
 
                         if (page.url().includes('success=RENEWED')) {
-                            reportLines.push(`${srv.name} : ✅ 成功续期`);
+                            reportLines.push(`${srv.name} : ✅ 成功续期 (最新时间需等下次运行更新)`);
                         } else if (page.url().includes('err=CANNOTAFFORDRENEWAL')) {
-                            reportLines.push(`${srv.name} : ❌ 余额不足`);
+                            reportLines.push(`${srv.name} : ❌ 余额不足 (需要 100 币)`);
                         } else if (page.url().includes('err=TOOEARLY')) {
                             reportLines.push(`${srv.name} : ⏳ 未到期 (剩余: ${remainingText})`);
                         } else {
-                            reportLines.push(`${srv.name} : ⚠️ 状态未知`);
+                            reportLines.push(`${srv.name} : ⚠️ 点击完成，但未识别到成功标记 (当前URL: ${page.url()})`);
                         }
                     } else {
                         reportLines.push(`${srv.name} : ⏳ 未到期 (按钮: ${btnText})`);
                     }
                 } else {
-                    reportLines.push(`${srv.name} : ⚠️ 弹窗未显示`);
+                    reportLines.push(`${srv.name} : ⚠️ 弹窗未显示 (可能被广告拦截或节点卡顿)`);
                 }
             } else {
                 reportLines.push(`${srv.name} : ⚠️ 未找到续期图标`);
@@ -205,7 +222,6 @@ test('FreezeHost 多服务器自动续期', async () => {
         reportLines.push(`❌ 脚本运行异常: ${e.message}`);
     } finally {
         if (reportLines.length > 0) {
-            // 在发送函数中传入提取到的金币变量
             await sendTG(reportLines.join('\n'), coinBalance);
         }
         await browser.close();
