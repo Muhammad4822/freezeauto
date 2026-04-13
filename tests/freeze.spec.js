@@ -98,6 +98,11 @@ test('FreezeHost 多账号全自动续期', async () => {
         const page = await context.newPage();
         page.setDefaultTimeout(TIMEOUT);
 
+        // 🛡️ 新增：网络层拦截广告请求，提升加载速度并彻底消除遮挡
+        await page.route('**/*googlesyndication.com*', route => route.abort());
+        await page.route('**/*doubleclick.net*', route => route.abort());
+        await page.route('**/*adsbygoogle*', route => route.abort());
+
         try {
             console.log('🔑 访问并登录 FreezeHost...');
             await page.goto('https://free.freezehost.pro', { waitUntil: 'domcontentloaded' });
@@ -215,9 +220,11 @@ test('FreezeHost 多账号全自动续期', async () => {
                                 if (await realRenewBtn.isVisible()) {
                                     await realRenewBtn.hover(); 
                                     await page.waitForTimeout(300);
-                                    await realRenewBtn.click({ delay: 150 }); 
+                                    // 🛡️ 新增：加入 force: true 强制点击
+                                    await realRenewBtn.click({ delay: 150, force: true }); 
                                 } else {
-                                    await page.locator('text="RENEW INSTANCE"').last().click({ delay: 150 });
+                                    // 🛡️ 新增：加入 force: true 强制点击
+                                    await page.locator('text="RENEW INSTANCE"').last().click({ delay: 150, force: true });
                                 }
                                 
                                 await page.waitForTimeout(6000); 
